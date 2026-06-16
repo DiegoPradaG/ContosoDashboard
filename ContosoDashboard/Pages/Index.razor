@@ -2,9 +2,11 @@
 @using ContosoDashboard.Services
 @using ContosoDashboard.Models
 @using Microsoft.AspNetCore.Authorization
+@using System.IO
 @attribute [Authorize]
 @inject IDashboardService DashboardService
 @inject INotificationService NotificationService
+@inject IDocumentService DocumentService
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Dashboard - ContosoDashboard</PageTitle>
@@ -20,35 +22,43 @@
     @if (summary != null)
     {
         <div class="row mb-4">
-            <div class="col-md-3 mb-3">
-                <div class="card summary-card">
+            <div class="col-xl col-md-4 col-sm-6 mb-3">
+                <div class="card summary-card shadow-sm border-0 bg-white">
                     <div class="card-body">
-                        <h5 class="card-title">Active Tasks</h5>
-                        <p class="card-text display-4">@summary.TotalActiveTasks</p>
+                        <h5 class="card-title text-muted fw-semibold mb-2">Active Tasks</h5>
+                        <p class="card-text display-4 mb-0 fw-bold">@summary.TotalActiveTasks</p>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3 mb-3">
-                <div class="card summary-card">
+            <div class="col-xl col-md-4 col-sm-6 mb-3">
+                <div class="card summary-card shadow-sm border-0 bg-white">
                     <div class="card-body">
-                        <h5 class="card-title">Due Today</h5>
-                        <p class="card-text display-4 text-warning">@summary.TasksDueToday</p>
+                        <h5 class="card-title text-muted fw-semibold mb-2">Due Today</h5>
+                        <p class="card-text display-4 mb-0 text-warning fw-bold">@summary.TasksDueToday</p>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3 mb-3">
-                <div class="card summary-card">
+            <div class="col-xl col-md-4 col-sm-6 mb-3">
+                <div class="card summary-card shadow-sm border-0 bg-white">
                     <div class="card-body">
-                        <h5 class="card-title">Active Projects</h5>
-                        <p class="card-text display-4 text-info">@summary.ActiveProjects</p>
+                        <h5 class="card-title text-muted fw-semibold mb-2">Active Projects</h5>
+                        <p class="card-text display-4 mb-0 text-info fw-bold">@summary.ActiveProjects</p>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3 mb-3">
-                <div class="card summary-card">
+            <div class="col-xl col-md-4 col-sm-6 mb-3">
+                <div class="card summary-card shadow-sm border-0 bg-white">
                     <div class="card-body">
-                        <h5 class="card-title">Notifications</h5>
-                        <p class="card-text display-4 text-danger">@summary.UnreadNotifications</p>
+                        <h5 class="card-title text-muted fw-semibold mb-2">Notifications</h5>
+                        <p class="card-text display-4 mb-0 text-danger fw-bold">@summary.UnreadNotifications</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl col-md-4 col-sm-6 mb-3">
+                <div class="card summary-card shadow-sm border-0 bg-white">
+                    <div class="card-body">
+                        <h5 class="card-title text-muted fw-semibold mb-2">Documents</h5>
+                        <p class="card-text display-4 mb-0 text-success fw-bold">@totalDocumentsCount</p>
                     </div>
                 </div>
             </div>
@@ -62,9 +72,9 @@
                 <h3>Announcements</h3>
                 @foreach (var announcement in announcements)
                 {
-                    <div class="card mb-3 announcement-card">
+                    <div class="card mb-3 announcement-card shadow-sm border-0">
                         <div class="card-body">
-                            <h5 class="card-title">@announcement.Title</h5>
+                            <h5 class="card-title fw-bold">@announcement.Title</h5>
                             <p class="card-text">@announcement.Content</p>
                             <small class="text-muted">
                                 Posted by @announcement.CreatedByUser.DisplayName on @announcement.PublishDate.ToString("MMM dd, yyyy")
@@ -77,44 +87,73 @@
     }
 
     <div class="row">
-        <div class="col-md-6">
-            <h3>Quick Actions</h3>
-            <div class="list-group">
-                <a href="/tasks" class="list-group-item list-group-item-action">
-                    <i class="bi bi-check2-square"></i> View My Tasks
+        <div class="col-md-4 mb-4">
+            <h3 class="h5 mb-3 fw-bold"><i class="bi bi-lightning-fill text-warning me-2"></i>Quick Actions</h3>
+            <div class="list-group shadow-sm">
+                <a href="/tasks" class="list-group-item list-group-item-action d-flex align-items-center">
+                    <i class="bi bi-check2-square me-2 text-primary"></i> View My Tasks
                 </a>
-                <a href="/projects" class="list-group-item list-group-item-action">
-                    <i class="bi bi-folder"></i> View My Projects
+                <a href="/projects" class="list-group-item list-group-item-action d-flex align-items-center">
+                    <i class="bi bi-folder me-2 text-info"></i> View My Projects
                 </a>
-                <a href="/notifications" class="list-group-item list-group-item-action">
-                    <i class="bi bi-bell"></i> View Notifications
+                <a href="/documents" class="list-group-item list-group-item-action d-flex align-items-center">
+                    <i class="bi bi-file-earmark me-2 text-success"></i> View My Documents
                 </a>
-                <a href="/profile" class="list-group-item list-group-item-action">
-                    <i class="bi bi-person"></i> Edit Profile
+                <a href="/notifications" class="list-group-item list-group-item-action d-flex align-items-center">
+                    <i class="bi bi-bell me-2 text-danger"></i> View Notifications
+                </a>
+                <a href="/profile" class="list-group-item list-group-item-action d-flex align-items-center">
+                    <i class="bi bi-person me-2 text-secondary"></i> Edit Profile
                 </a>
             </div>
         </div>
 
-        <div class="col-md-6">
-            <h3>Recent Notifications</h3>
+        <div class="col-md-4 mb-4">
+            <h3 class="h5 mb-3 fw-bold"><i class="bi bi-file-earmark-text-fill text-success me-2"></i>Recent Documents</h3>
+            @if (recentDocuments != null && recentDocuments.Any())
+            {
+                <div class="list-group shadow-sm">
+                    @foreach (var doc in recentDocuments)
+                    {
+                        <a href="/api/documents/download/@doc.DocumentId" target="_blank" class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between align-items-center mb-1">
+                                <span class="fw-semibold text-truncate small" style="max-width: 70%;" title="@doc.Title">@doc.Title</span>
+                                <span class="text-muted" style="font-size: 0.75rem;">@GetRelativeTime(doc.UploadDate)</span>
+                            </div>
+                            <div class="d-flex align-items-center text-muted" style="font-size: 0.75rem;">
+                                <i class="bi bi-paperclip me-1"></i>
+                                <span class="text-truncate">@doc.FileName</span>
+                            </div>
+                        </a>
+                    }
+                </div>
+            }
+            else
+            {
+                <p class="text-muted small">No recent documents</p>
+            }
+        </div>
+
+        <div class="col-md-4 mb-4">
+            <h3 class="h5 mb-3 fw-bold"><i class="bi bi-bell-fill text-danger me-2"></i>Recent Notifications</h3>
             @if (recentNotifications != null && recentNotifications.Any())
             {
-                <div class="list-group">
+                <div class="list-group shadow-sm">
                     @foreach (var notification in recentNotifications.Take(5))
                     {
-                        <div class="list-group-item @(!notification.IsRead ? "bg-light" : "")">
-                            <div class="d-flex w-100 justify-content-between">
-                                <h6 class="mb-1">@notification.Title</h6>
-                                <small>@GetRelativeTime(notification.CreatedDate)</small>
+                        <div class="list-group-item @(!notification.IsRead ? "bg-light border-start border-primary border-3" : "")">
+                            <div class="d-flex w-100 justify-content-between align-items-center">
+                                <h6 class="mb-1 text-truncate fw-semibold small" style="max-width: 75%;">@notification.Title</h6>
+                                <span class="text-muted" style="font-size: 0.75rem;">@GetRelativeTime(notification.CreatedDate)</span>
                             </div>
-                            <p class="mb-1">@notification.Message</p>
+                            <p class="mb-0 text-muted small text-truncate-2">@notification.Message</p>
                         </div>
                     }
                 </div>
             }
             else
             {
-                <p class="text-muted">No recent notifications</p>
+                <p class="text-muted small">No recent notifications</p>
             }
         </div>
     </div>
@@ -124,6 +163,8 @@
     private DashboardSummary? summary;
     private List<Announcement>? announcements;
     private List<Notification>? recentNotifications;
+    private List<Document>? recentDocuments;
+    private int totalDocumentsCount = 0;
     private string userName = "User";
     private int currentUserId = 0;
 
@@ -146,6 +187,21 @@
             summary = await DashboardService.GetDashboardSummaryAsync(currentUserId);
             announcements = await DashboardService.GetActiveAnnouncementsAsync();
             recentNotifications = await NotificationService.GetUserNotificationsAsync(currentUserId);
+            
+            try
+            {
+                var allUserDocs = await DocumentService.SearchDocumentsAsync(string.Empty, currentUserId);
+                if (allUserDocs != null)
+                {
+                    totalDocumentsCount = allUserDocs.Count;
+                    recentDocuments = allUserDocs.Take(5).ToList();
+                }
+            }
+            catch (Exception)
+            {
+                // Soft fail for dashboard
+                recentDocuments = new List<Document>();
+            }
         }
     }
 
@@ -156,11 +212,11 @@
         if (timeSpan.TotalMinutes < 1)
             return "Just now";
         if (timeSpan.TotalMinutes < 60)
-            return $"{(int)timeSpan.TotalMinutes} min ago";
+            return $"{(int)timeSpan.TotalMinutes}m ago";
         if (timeSpan.TotalHours < 24)
-            return $"{(int)timeSpan.TotalHours} hours ago";
+            return $"{(int)timeSpan.TotalHours}h ago";
         if (timeSpan.TotalDays < 7)
-            return $"{(int)timeSpan.TotalDays} days ago";
+            return $"{(int)timeSpan.TotalDays}d ago";
 
         return dateTime.ToString("MMM dd, yyyy");
     }

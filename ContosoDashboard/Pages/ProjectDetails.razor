@@ -3,8 +3,10 @@
 @using ContosoDashboard.Models
 @using Microsoft.AspNetCore.Authorization
 @using System.Security.Claims
+@using System.IO
 @attribute [Authorize]
 @inject IProjectService ProjectService
+@inject IDocumentService DocumentService
 @inject NavigationManager NavigationManager
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
@@ -151,6 +153,69 @@
                         }
                     </div>
                 </div>
+
+                <div class="card mt-4 shadow-sm">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0 fw-bold text-gray-800"><i class="bi bi-folder-fill me-2 text-primary"></i>Project Documents</h5>
+                        <div class="d-flex align-items-center">
+                            @if (isUploading)
+                            {
+                                <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                            }
+                            <InputFile @key="inputFileKey" OnChange="UploadProjectFile" class="form-control form-control-sm" style="max-width: 250px;" />
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        @if (uploadError != null)
+                        {
+                            <div class="alert alert-danger py-2 mb-3 small">@uploadError</div>
+                        }
+                        @if (uploadSuccess != null)
+                        {
+                            <div class="alert alert-success py-2 mb-3 small">@uploadSuccess</div>
+                        }
+
+                        @if (projectDocuments == null || !projectDocuments.Any())
+                        {
+                            <p class="text-muted mb-0 py-2">No documents uploaded for this project.</p>
+                        }
+                        else
+                        {
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Title</th>
+                                            <th>Uploaded By</th>
+                                            <th>Date</th>
+                                            <th>Size</th>
+                                            <th class="text-end">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var doc in projectDocuments)
+                                        {
+                                            <tr>
+                                                <td>
+                                                    <i class="bi @GetFileIconClass(doc.FileName) me-2 fs-5"></i>
+                                                    <span class="fw-semibold">@doc.Title</span>
+                                                </td>
+                                                <td>@doc.UploadedByUser?.DisplayName</td>
+                                                <td>@doc.UploadDate.ToLocalTime().ToString("MMM dd, yyyy")</td>
+                                                <td>@FormatFileSize(doc.FileSize)</td>
+                                                <td class="text-end">
+                                                    <a href="/api/documents/download/@doc.DocumentId" class="btn btn-sm btn-outline-primary" target="_blank">
+                                                        <i class="bi bi-download me-1"></i> Download
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+                </div>
             </div>
 
             <div class="col-md-4">
@@ -239,6 +304,12 @@
     private Project? project;
     private int currentUserId = 0;
 
+    private List<Document> projectDocuments = new List<Document>();
+    private bool isUploading = false;
+    private string? uploadError;
+    private string? uploadSuccess;
+    private Guid inputFileKey = Guid.NewGuid();
+
     protected override async Task OnInitializedAsync()
     {
         // Get current user ID from authentication claims
@@ -258,7 +329,11 @@
         if (project == null)
         {
             NavigationManager.NavigateTo("/projects");
+            return;
         }
+
+        // Load project documents
+        projectDocuments = await DocumentService.GetProjectDocumentsAsync(ProjectId, currentUserId);
     }
 
     private string GetStatusColor(ProjectStatus status)
@@ -304,5 +379,94 @@
             return $"{names[0][0]}{names[1][0]}".ToUpper();
         }
         return displayName.Length > 0 ? displayName[0].ToString().ToUpper() : "?";
+    }
+
+    private async Task UploadProjectFile(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+
+        if (file.Size > 25 * 1024 * 1024)
+        {
+            uploadError = "File size exceeds 25 MB limit.";
+            uploadSuccess = null;
+            return;
+        }
+
+        isUploading = true;
+        uploadError = null;
+        uploadSuccess = null;
+
+        try
+        {
+            using var memoryStream = new MemoryStream();
+            using (var uploadStream = file.OpenReadStream(26214400))
+            {
+                await uploadStream.CopyToAsync(memoryStream);
+            }
+            memoryStream.Position = 0;
+
+            var title = Path.GetFileNameWithoutExtension(file.Name);
+
+            var success = await DocumentService.UploadDocumentAsync(
+                title,
+                $"Document uploaded for project '{project?.Name}'",
+                "Project Documents",
+                file.Name,
+                file.ContentType,
+                memoryStream,
+                currentUserId,
+                ProjectId,
+                "project"
+            );
+
+            if (success)
+            {
+                uploadSuccess = "Document uploaded successfully!";
+                projectDocuments = await DocumentService.GetProjectDocumentsAsync(ProjectId, currentUserId);
+                inputFileKey = Guid.NewGuid();
+            }
+            else
+            {
+                uploadError = "Failed to upload document.";
+            }
+        }
+        catch (Exception ex)
+        {
+            uploadError = $"Upload error: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] suffix = { "B", "KB", "MB", "GB" };
+        double dblSized = bytes;
+        int i = 0;
+        while (dblSized >= 1024 && i < suffix.Length - 1)
+        {
+            dblSized /= 1024;
+            i++;
+        }
+        return $"{dblSized:F1} {suffix[i]}";
+    }
+
+    private string GetFileIconClass(string filename)
+    {
+        var ext = Path.GetExtension(filename).ToLower();
+        return ext switch
+        {
+            ".pdf" => "bi-file-pdf text-danger",
+            ".doc" or ".docx" => "bi-file-word text-primary",
+            ".xls" or ".xlsx" => "bi-file-excel text-success",
+            ".ppt" or ".pptx" => "bi-file-slides text-warning",
+            ".jpg" or ".jpeg" or ".png" => "bi-file-image text-info",
+            ".txt" => "bi-file-text text-secondary",
+            _ => "bi-file-earmark text-muted"
+        };
     }
 }

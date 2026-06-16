@@ -1,0 +1,880 @@
+@page "/documents"
+@using System.IO
+using ContosoDashboard.Models
+using ContosoDashboard.Services
+using Microsoft.AspNetCore.Components.Authorization
+using System.Security.Claims
+
+@inject IDocumentService DocumentService
+@inject IUserService UserService
+@inject IProjectService ProjectService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager NavManager
+
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h3 mb-0 text-gray-800"><i class="bi bi-folder2-open me-2 text-primary"></i>Gestión de Documentos</h1>
+        <button class="btn btn-primary shadow-sm" @onclick="ShowUploadModal">
+            <i class="bi bi-cloud-arrow-up-fill me-2"></i>Subir Documento
+        </button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+            <i class="bi bi-check-circle-fill me-2"></i>@successMessage
+            <button type="button" class="btn-close" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>@errorMessage
+            <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <!-- Búsqueda y Filtros -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="input-group">
+                        <span class="input-group-text bg-light border-end-0"><i class="bi bi-search text-muted"></i></span>
+                        <input type="text" class="form-control border-start-0 bg-light" placeholder="Buscar por título, descripción, tags o autor..." @bind="searchQuery" @bind:event="oninput" @onkeyup="HandleSearch" />
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select bg-light" @bind="selectedCategoryFilter" @bind:after="LoadDocuments">
+                        <option value="">Todas las Categorías</option>
+                        <option value="Project Documents">Project Documents</option>
+                        <option value="Team Resources">Team Resources</option>
+                        <option value="Personal Files">Personal Files</option>
+                        <option value="Reports">Reports</option>
+                        <option value="Presentations">Presentations</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select bg-light" @bind="selectedProjectFilter" @bind:after="LoadDocuments">
+                        <option value="">Todos los Proyectos</option>
+                        @foreach (var proj in userProjects)
+                        {
+                            <option value="@proj.ProjectId">@proj.Name</option>
+                        }
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pestañas de Vistas -->
+    <div class="card shadow-sm">
+        <div class="card-header bg-white border-bottom-0 pb-0">
+            <ul class="nav nav-tabs card-header-tabs" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link @(activeTab == "my" ? "active fw-bold text-primary" : "text-secondary")" @onclick='() => ChangeTab("my")'>
+                        <i class="bi bi-person-fill me-1"></i>Mis Documentos
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link @(activeTab == "shared" ? "active fw-bold text-primary" : "text-secondary")" @onclick='() => ChangeTab("shared")'>
+                        <i class="bi bi-people-fill me-1"></i>Compartidos Conmigo
+                    </button>
+                </li>
+                @if (isAdmin)
+                {
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "all" ? "active fw-bold text-primary" : "text-secondary")" @onclick='() => ChangeTab("all")'>
+                            <i class="bi bi-shield-fill-check me-1"></i>Todos (Admin)
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "audit" ? "active fw-bold text-primary" : "text-secondary")" @onclick='() => ChangeTab("audit")'>
+                            <i class="bi bi-journal-text me-1"></i>Auditoría (Admin)
+                        </button>
+                    </li>
+                }
+            </ul>
+        </div>
+        <div class="card-body">
+            @if (activeTab == "audit")
+            {
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Usuario</th>
+                                <th>Acción</th>
+                                <th>Detalles</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!auditLogs.Any())
+                            {
+                                <tr>
+                                    <td colspan="4" class="text-center py-4 text-muted">No hay registros de auditoría disponibles.</td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var log in auditLogs)
+                                {
+                                    <tr>
+                                        <td>@log.Timestamp.ToLocalTime().ToString("g")</td>
+                                        <td class="fw-bold">@log.User?.DisplayName</td>
+                                        <td>
+                                            <span class="badge @(GetAuditBadgeClass(log.Action))">@log.Action</span>
+                                        </td>
+                                        <td>@log.Details</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Título</th>
+                                <th>Categoría</th>
+                                <th>Proyecto</th>
+                                <th>Fecha Carga</th>
+                                <th>Tamaño</th>
+                                <th>Cargado Por</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!displayedDocuments.Any())
+                            {
+                                <tr>
+                                    <td colspan="7" class="text-center py-5 text-muted">
+                                        <i class="bi bi-file-earmark-bar-graph fs-2 d-block mb-3 text-muted"></i>
+                                        No se encontraron documentos en esta sección.
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var doc in displayedDocuments)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <i class="bi @GetFileIconClass(doc.FileName) fs-4 text-primary me-3"></i>
+                                                <div>
+                                                    <span class="fw-semibold d-block">@doc.Title</span>
+                                                    @if (!string.IsNullOrEmpty(doc.Description))
+                                                    {
+                                                        <small class="text-muted d-block text-truncate" style="max-width: 250px;">@doc.Description</small>
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(doc.Tags))
+                                                    {
+                                                        <div class="mt-1">
+                                                            @foreach (var tag in doc.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                                                            {
+                                                                <span class="badge bg-light text-secondary border me-1" style="font-size: 0.7rem;">#@tag.Trim()</span>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-secondary-subtle text-secondary-emphasis">@doc.Category</span>
+                                        </td>
+                                        <td>
+                                            @(doc.Project?.Name ?? "Ninguno")
+                                        </td>
+                                        <td>@doc.UploadDate.ToLocalTime().ToString("d")</td>
+                                        <td>@FormatFileSize(doc.FileSize)</td>
+                                        <td>@doc.UploadedByUser?.DisplayName</td>
+                                        <td class="text-end">
+                                            <div class="btn-group shadow-sm">
+                                                <a href="/api/documents/download/@doc.DocumentId" class="btn btn-sm btn-outline-secondary" title="Descargar" target="_blank">
+                                                    <i class="bi bi-download"></i>
+                                                </a>
+                                                @if (doc.UploadedByUserId == currentUserId || isAdmin)
+                                                {
+                                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ShowShareModal(doc)" title="Compartir">
+                                                        <i class="bi bi-share"></i>
+                                                    </button>
+                                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ShowEditModal(doc)" title="Editar">
+                                                        <i class="bi bi-pencil"></i>
+                                                    </button>
+                                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(doc)" title="Eliminar">
+                                                        <i class="bi bi-trash"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Subir Documento -->
+@if (showUploadModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content shadow">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-cloud-arrow-up-fill text-primary me-2"></i>Subir Nuevo Documento</h5>
+                    <button type="button" class="btn-close" @onclick="HideUploadModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Archivo * (Máx. 25MB)</label>
+                        <InputFile @key="inputFileKey" OnChange="OnInputFileChange" class="form-control" />
+                        @if (selectedFileMetadata != null)
+                        {
+                            <div class="form-text text-success">
+                                Seleccionado: @selectedFileMetadata.Name (@FormatFileSize(selectedFileMetadata.Size))
+                            </div>
+                        }
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Título *</label>
+                        <input type="text" class="form-control" @bind="newDocumentTitle" placeholder="Ej. Presupuesto 2026" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Descripción</label>
+                        <textarea class="form-control" rows="2" @bind="newDocumentDescription" placeholder="Detalles del archivo..."></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Categoría *</label>
+                            <select class="form-select" @bind="newDocumentCategory">
+                                <option value="Project Documents">Project Documents</option>
+                                <option value="Team Resources">Team Resources</option>
+                                <option value="Personal Files">Personal Files</option>
+                                <option value="Reports">Reports</option>
+                                <option value="Presentations">Presentations</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-semibold">Proyecto</label>
+                            <select class="form-select" @bind="newDocumentProjectId">
+                                <option value="">Ninguno</option>
+                                @foreach (var proj in userProjects)
+                                {
+                                    <option value="@proj.ProjectId">@proj.Name</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Tags (separados por comas)</label>
+                        <input type="text" class="form-control" @bind="newDocumentTags" placeholder="Ej. marketing, reporte, excel" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="HideUploadModal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveUploadedDocument" disabled="@isUploading">
+                        @if (isUploading)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span><span>Cargando...</span>
+                        }
+                        else
+                        {
+                            <span>Subir Documento</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal: Compartir Documento -->
+@if (showShareModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content shadow">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-share text-primary me-2"></i>Compartir Documento</h5>
+                    <button type="button" class="btn-close" @onclick="HideShareModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">Estás compartiendo: <strong class="text-dark">@selectedDocument?.Title</strong></p>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Compartir con Usuario</label>
+                        <select class="form-select" @bind="shareTargetUserId">
+                            <option value="">Seleccionar Usuario...</option>
+                            @foreach (var usr in allUsers)
+                            {
+                                @if (usr.UserId != currentUserId)
+                                {
+                                    <option value="@usr.UserId">@usr.DisplayName (@usr.Email)</option>
+                                }
+                            }
+                        </select>
+                    </div>
+
+                    <div class="text-center my-3 text-muted fw-bold">O</div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Compartir con Departamento (Equipo)</label>
+                        <select class="form-select" @bind="shareTargetDepartment">
+                            <option value="">Seleccionar Departamento...</option>
+                            @foreach (var dept in distinctDepartments)
+                            {
+                                <option value="@dept">@dept</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="HideShareModal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveShare">Compartir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal: Editar Metadatos -->
+@if (showEditModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content shadow">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square text-primary me-2"></i>Editar Información</h5>
+                    <button type="button" class="btn-close" @onclick="HideEditModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Título *</label>
+                        <input type="text" class="form-control" @bind="editDocumentTitle" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Descripción</label>
+                        <textarea class="form-control" rows="2" @bind="editDocumentDescription"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Categoría *</label>
+                        <select class="form-select" @bind="editDocumentCategory">
+                            <option value="Project Documents">Project Documents</option>
+                            <option value="Team Resources">Team Resources</option>
+                            <option value="Personal Files">Personal Files</option>
+                            <option value="Reports">Reports</option>
+                            <option value="Presentations">Presentations</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Tags (separados por comas)</label>
+                        <input type="text" class="form-control" @bind="editDocumentTags" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="HideEditModal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveEdit">Guardar Cambios</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal: Confirmar Borrado -->
+@if (showDeleteModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content shadow border-danger">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-trash-fill me-2"></i>¿Eliminar?</h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="HideDeleteModal"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <p class="mb-0">¿Estás seguro de eliminar permanentemente <br/><strong>@selectedDocument?.Title</strong>?</p>
+                    <p class="text-danger small mt-2"><i class="bi bi-exclamation-triangle"></i> Esta acción no se puede deshacer y borrará el archivo físico del servidor.</p>
+                </div>
+                <div class="modal-footer justify-content-center">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="HideDeleteModal">Cancelar</button>
+                    <button type="button" class="btn btn-danger btn-sm" @onclick="SaveDelete">Eliminar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private int currentUserId;
+    private string currentUserDepartment = "";
+    private bool isAdmin = false;
+
+    private string activeTab = "my";
+    private string searchQuery = "";
+    private string selectedCategoryFilter = "";
+    private string? selectedProjectFilter;
+
+    // Listas principales
+    private List<Document> allDocuments = new List<Document>();
+    private List<Document> displayedDocuments = new List<Document>();
+    private List<Project> userProjects = new List<Project>();
+    private List<User> allUsers = new List<User>();
+    private List<string> distinctDepartments = new List<string>();
+    private List<AuditLog> auditLogs = new List<AuditLog>();
+
+    // Control de Modales
+    private bool showUploadModal = false;
+    private bool showShareModal = false;
+    private bool showEditModal = false;
+    private bool showDeleteModal = false;
+
+    // Alertas
+    private string? successMessage;
+    private string? errorMessage;
+
+    // Carga de Archivos
+    private bool isUploading = false;
+    private Guid inputFileKey = Guid.NewGuid();
+    private IBrowserFile? selectedFile;
+    private FileMetadata? selectedFileMetadata;
+
+    // Variables de Formulario: Upload
+    private string newDocumentTitle = "";
+    private string newDocumentDescription = "";
+    private string newDocumentCategory = "Project Documents";
+    private string? newDocumentProjectId;
+    private string newDocumentTags = "";
+
+    // Variables de Formulario: Share
+    private Document? selectedDocument;
+    private string? shareTargetUserId;
+    private string shareTargetDepartment = "";
+
+    // Variables de Formulario: Edit
+    private string editDocumentTitle = "";
+    private string editDocumentDescription = "";
+    private string editDocumentCategory = "Project Documents";
+    private string editDocumentTags = "";
+
+    private class FileMetadata
+    {
+        public string Name { get; set; } = "";
+        public long Size { get; set; }
+        public string ContentType { get; set; } = "";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userClaims = authState.User;
+
+        if (userClaims.Identity != null && userClaims.Identity.IsAuthenticated)
+        {
+            var userIdClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim != null && int.TryParse(userIdClaim.Value, out var uId))
+            {
+                currentUserId = uId;
+                isAdmin = userClaims.IsInRole("Administrator");
+                var deptClaim = userClaims.FindFirst("Department") ?? userClaims.FindFirst(ClaimTypes.PostalCode); // fallback claim if custom
+                currentUserDepartment = deptClaim?.Value ?? "";
+            }
+        }
+        else
+        {
+            NavManager.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        // Cargar listas iniciales
+        userProjects = await ProjectService.GetUserProjectsAsync(currentUserId);
+        allUsers = await UserService.GetAllUsersAsync();
+        distinctDepartments = allUsers
+            .Where(u => !string.IsNullOrEmpty(u.Department))
+            .Select(u => u.Department!)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToList();
+
+        await LoadDocuments();
+    }
+
+    private async Task LoadDocuments()
+    {
+        try
+        {
+            errorMessage = null;
+
+            if (activeTab == "my")
+            {
+                allDocuments = await DocumentService.GetUserDocumentsAsync(currentUserId);
+            }
+            else if (activeTab == "shared")
+            {
+                allDocuments = await DocumentService.GetSharedDocumentsAsync(currentUserId, currentUserDepartment);
+            }
+            else if (activeTab == "all" && isAdmin)
+            {
+                allDocuments = await DocumentService.SearchDocumentsAsync("", currentUserId);
+            }
+            else if (activeTab == "audit" && isAdmin)
+            {
+                auditLogs = await DocumentService.GetAuditLogsAsync(currentUserId);
+                return;
+            }
+
+            FilterAndSortDocuments();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al cargar documentos: {ex.Message}";
+        }
+    }
+
+    private void FilterAndSortDocuments()
+    {
+        var query = allDocuments.AsQueryable();
+
+        // Filtro por categoría
+        if (!string.IsNullOrEmpty(selectedCategoryFilter))
+        {
+            query = query.Where(d => d.Category == selectedCategoryFilter);
+        }
+
+        // Filtro por proyecto
+        if (!string.IsNullOrEmpty(selectedProjectFilter))
+        {
+            if (int.TryParse(selectedProjectFilter, out var projId))
+            {
+                query = query.Where(d => d.ProjectId == projId);
+            }
+        }
+
+        // Filtro por búsqueda de texto
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            var q = searchQuery.ToLower();
+            query = query.Where(d => 
+                d.Title.ToLower().Contains(q) || 
+                (d.Description != null && d.Description.ToLower().Contains(q)) ||
+                (d.Tags != null && d.Tags.ToLower().Contains(q)) ||
+                d.UploadedByUser.DisplayName.ToLower().Contains(q)
+            );
+        }
+
+        displayedDocuments = query.OrderByDescending(d => d.UploadDate).ToList();
+    }
+
+    private async Task ChangeTab(string tab)
+    {
+        activeTab = tab;
+        searchQuery = "";
+        selectedCategoryFilter = "";
+        selectedProjectFilter = null;
+        await LoadDocuments();
+    }
+
+    private void HandleSearch()
+    {
+        FilterAndSortDocuments();
+    }
+
+    // --- Carga de Archivos ---
+
+    private void OnInputFileChange(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        if (selectedFile != null)
+        {
+            selectedFileMetadata = new FileMetadata
+            {
+                Name = selectedFile.Name,
+                Size = selectedFile.Size,
+                ContentType = selectedFile.ContentType
+            };
+            
+            // Sugiere el título basado en el nombre del archivo sin extensión si está vacío
+            if (string.IsNullOrWhiteSpace(newDocumentTitle))
+            {
+                newDocumentTitle = Path.GetFileNameWithoutExtension(selectedFile.Name);
+            }
+        }
+    }
+
+    private async Task SaveUploadedDocument()
+    {
+        if (selectedFile == null || selectedFileMetadata == null)
+        {
+            errorMessage = "Por favor selecciona un archivo primero.";
+            return;
+        }
+
+        if (selectedFileMetadata.Size > 25 * 1024 * 1024)
+        {
+            errorMessage = "El tamaño máximo permitido es de 25 MB.";
+            return;
+        }
+
+        isUploading = true;
+        errorMessage = null;
+        successMessage = null;
+
+        try
+        {
+            // Blazor Server pattern: Copiar stream a MemoryStream de inmediato
+            using var memoryStream = new MemoryStream();
+            using (var uploadStream = selectedFile.OpenReadStream(26214400)) // 25MB max size
+            {
+                await uploadStream.CopyToAsync(memoryStream);
+            }
+            memoryStream.Position = 0;
+
+            int? projId = null;
+            if (!string.IsNullOrEmpty(newDocumentProjectId) && int.TryParse(newDocumentProjectId, out var pId))
+            {
+                projId = pId;
+            }
+
+            var success = await DocumentService.UploadDocumentAsync(
+                newDocumentTitle,
+                newDocumentDescription,
+                newDocumentCategory,
+                selectedFileMetadata.Name,
+                selectedFileMetadata.ContentType,
+                memoryStream,
+                currentUserId,
+                projId,
+                newDocumentTags
+            );
+
+            if (success)
+            {
+                successMessage = "¡Documento cargado exitosamente!";
+                HideUploadModal();
+                await LoadDocuments();
+            }
+            else
+            {
+                errorMessage = "No se pudo completar el registro del archivo.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error de subida: {ex.Message}";
+        }
+        finally
+        {
+            selectedFile = null; // Liberar referencia
+            isUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    // --- Control de Modales ---
+
+    private void ShowUploadModal()
+    {
+        newDocumentTitle = "";
+        newDocumentDescription = "";
+        newDocumentCategory = "Project Documents";
+        newDocumentProjectId = "";
+        newDocumentTags = "";
+        selectedFile = null;
+        selectedFileMetadata = null;
+        inputFileKey = Guid.NewGuid(); // Reiniciar InputFile
+        showUploadModal = true;
+    }
+
+    private void HideUploadModal()
+    {
+        showUploadModal = false;
+    }
+
+    private void ShowShareModal(Document doc)
+    {
+        selectedDocument = doc;
+        shareTargetUserId = "";
+        shareTargetDepartment = "";
+        showShareModal = true;
+    }
+
+    private void HideShareModal()
+    {
+        showShareModal = false;
+    }
+
+    private async Task SaveShare()
+    {
+        if (selectedDocument == null) return;
+        if (string.IsNullOrEmpty(shareTargetUserId) && string.IsNullOrEmpty(shareTargetDepartment))
+        {
+            errorMessage = "Debes seleccionar al menos un usuario o un departamento.";
+            return;
+        }
+
+        try
+        {
+            int? targetId = null;
+            if (!string.IsNullOrEmpty(shareTargetUserId) && int.TryParse(shareTargetUserId, out var tId))
+            {
+                targetId = tId;
+            }
+
+            var success = await DocumentService.ShareDocumentAsync(
+                selectedDocument.DocumentId,
+                targetId,
+                shareTargetDepartment,
+                currentUserId
+            );
+
+            if (success)
+            {
+                successMessage = $"¡Documento '{selectedDocument.Title}' compartido correctamente!";
+                HideShareModal();
+            }
+            else
+            {
+                errorMessage = "Acción denegada o documento no encontrado.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al compartir: {ex.Message}";
+        }
+    }
+
+    private void ShowEditModal(Document doc)
+    {
+        selectedDocument = doc;
+        editDocumentTitle = doc.Title;
+        editDocumentDescription = doc.Description ?? "";
+        editDocumentCategory = doc.Category;
+        editDocumentTags = doc.Tags ?? "";
+        showEditModal = true;
+    }
+
+    private void HideEditModal()
+    {
+        showEditModal = false;
+    }
+
+    private async Task SaveEdit()
+    {
+        if (selectedDocument == null) return;
+
+        try
+        {
+            var success = await DocumentService.UpdateDocumentMetadataAsync(
+                selectedDocument.DocumentId,
+                editDocumentTitle,
+                editDocumentDescription,
+                editDocumentCategory,
+                editDocumentTags,
+                currentUserId
+            );
+
+            if (success)
+            {
+                successMessage = "¡Información actualizada correctamente!";
+                HideEditModal();
+                await LoadDocuments();
+            }
+            else
+            {
+                errorMessage = "Error al actualizar la información.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al editar: {ex.Message}";
+        }
+    }
+
+    private void ConfirmDelete(Document doc)
+    {
+        selectedDocument = doc;
+        showDeleteModal = true;
+    }
+
+    private void HideDeleteModal()
+    {
+        showDeleteModal = false;
+    }
+
+    private async Task SaveDelete()
+    {
+        if (selectedDocument == null) return;
+
+        try
+        {
+            var success = await DocumentService.DeleteDocumentAsync(selectedDocument.DocumentId, currentUserId);
+            if (success)
+            {
+                successMessage = "Documento eliminado correctamente.";
+                HideDeleteModal();
+                await LoadDocuments();
+            }
+            else
+            {
+                errorMessage = "No tienes permiso para eliminar este documento.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error al eliminar: {ex.Message}";
+        }
+    }
+
+    // --- Utilitarios ---
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] suffix = { "B", "KB", "MB", "GB" };
+        double dblSized = bytes;
+        int i = 0;
+        while (dblSized >= 1024 && i < suffix.Length - 1)
+        {
+            dblSized /= 1024;
+            i++;
+        }
+        return $"{dblSized:F1} {suffix[i]}";
+    }
+
+    private string GetFileIconClass(string filename)
+    {
+        var ext = Path.GetExtension(filename).ToLower();
+        return ext switch
+        {
+            ".pdf" => "bi-file-pdf text-danger",
+            ".doc" or ".docx" => "bi-file-word text-primary",
+            ".xls" or ".xlsx" => "bi-file-excel text-success",
+            ".ppt" or ".pptx" => "bi-file-slides text-warning",
+            ".jpg" or ".jpeg" or ".png" => "bi-file-image text-info",
+            ".txt" => "bi-file-text text-secondary",
+            _ => "bi-file-earmark text-muted"
+        };
+    }
+
+    private string GetAuditBadgeClass(string action)
+    {
+        return action switch
+        {
+            "Upload" => "bg-success-subtle text-success",
+            "Download" => "bg-info-subtle text-info",
+            "Delete" => "bg-danger-subtle text-danger",
+            "Share" => "bg-warning-subtle text-warning",
+            _ => "bg-secondary-subtle text-secondary"
+        };
+    }
+}

@@ -3,8 +3,10 @@
 @using ContosoDashboard.Models
 @using Microsoft.AspNetCore.Authorization
 @using System.Security.Claims
+@using System.IO
 @attribute [Authorize]
 @inject ITaskService TaskService
+@inject IDocumentService DocumentService
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>My Tasks - ContosoDashboard</PageTitle>
@@ -133,6 +135,98 @@
             </table>
         </div>
     }
+
+    @if (showTaskDetailsModal && selectedTaskItem != null)
+    {
+        <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+            <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-content shadow border-0">
+                    <div class="modal-header">
+                        <h5 class="modal-title fw-bold"><i class="bi bi-list-task me-2 text-primary"></i>Detalles de Tarea: @selectedTaskItem.Title</h5>
+                        <button type="button" class="btn-close" @onclick="HideTaskDetailsModal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-8">
+                                <label class="text-muted small d-block">Descripción</label>
+                                <p class="lead">@(selectedTaskItem.Description ?? "Sin descripción.")</p>
+                            </div>
+                            <div class="col-md-4 bg-light p-3 rounded border">
+                                <div class="mb-2">
+                                    <span class="fw-bold">Estado:</span> 
+                                    <span class="badge bg-primary">@selectedTaskItem.Status</span>
+                                </div>
+                                <div class="mb-2">
+                                    <span class="fw-bold">Prioridad:</span> 
+                                    <span class="badge bg-@GetPriorityColor(selectedTaskItem.Priority)">@selectedTaskItem.Priority</span>
+                                </div>
+                                <div class="mb-2">
+                                    <span class="fw-bold">Vencimiento:</span> 
+                                    <span>@(selectedTaskItem.DueDate?.ToString("MMM dd, yyyy") ?? "Sin vencimiento")</span>
+                                </div>
+                                @if (selectedTaskItem.Project != null)
+                                {
+                                    <div>
+                                        <span class="fw-bold">Proyecto:</span> 
+                                        <span>@selectedTaskItem.Project.Name</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <hr />
+
+                        <!-- Sección de Documentos -->
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold mb-0"><i class="bi bi-paperclip me-1 text-primary"></i>Documentos Adjuntos</h6>
+                            <div class="d-flex align-items-center">
+                                @if (isTaskUploading)
+                                {
+                                    <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                                }
+                                <InputFile @key="taskInputFileKey" OnChange="UploadTaskFile" class="form-control form-control-sm" style="max-width: 250px;" />
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(taskUploadError))
+                        {
+                            <div class="alert alert-danger py-1 mb-3 small">@taskUploadError</div>
+                        }
+                        @if (!string.IsNullOrEmpty(taskUploadSuccess))
+                        {
+                            <div class="alert alert-success py-1 mb-3 small">@taskUploadSuccess</div>
+                        }
+
+                        @if (taskDocuments == null || !taskDocuments.Any())
+                        {
+                            <p class="text-muted small py-2">No hay documentos adjuntos a esta tarea.</p>
+                        }
+                        else
+                        {
+                            <div class="list-group">
+                                @foreach (var doc in taskDocuments)
+                                {
+                                    <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+                                        <div>
+                                            <i class="bi @GetFileIconClass(doc.FileName) me-2"></i>
+                                            <span class="fw-semibold small">@doc.Title</span>
+                                            <span class="text-muted small ms-2">(@FormatFileSize(doc.FileSize) - @doc.UploadedByUser?.DisplayName)</span>
+                                        </div>
+                                        <a href="/api/documents/download/@doc.DocumentId" class="btn btn-sm btn-outline-primary" target="_blank">
+                                            <i class="bi bi-download"></i> Descargar
+                                        </a>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary btn-sm" @onclick="HideTaskDetailsModal">Cerrar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
@@ -140,6 +234,15 @@
     private string filterStatus = "";
     private string filterPriority = "";
     private int currentUserId = 0;
+
+    // Task Details Modal
+    private bool showTaskDetailsModal = false;
+    private TaskItem? selectedTaskItem;
+    private List<Document> taskDocuments = new List<Document>();
+    private string taskUploadError = "";
+    private string taskUploadSuccess = "";
+    private bool isTaskUploading = false;
+    private Guid taskInputFileKey = Guid.NewGuid();
 
     protected override async Task OnInitializedAsync()
     {
@@ -185,9 +288,129 @@
         // TODO: Implement modal dialog for creating tasks
     }
 
-    private void ViewTaskDetails(int taskId)
+    private async Task ViewTaskDetails(int taskId)
     {
-        // TODO: Navigate to task details or show modal
+        if (tasks == null) return;
+
+        selectedTaskItem = tasks.FirstOrDefault(t => t.TaskId == taskId);
+        if (selectedTaskItem != null)
+        {
+            taskUploadError = "";
+            taskUploadSuccess = "";
+            showTaskDetailsModal = true;
+            await LoadTaskDocuments();
+        }
+    }
+
+    private void HideTaskDetailsModal()
+    {
+        showTaskDetailsModal = false;
+        selectedTaskItem = null;
+    }
+
+    private async Task LoadTaskDocuments()
+    {
+        if (selectedTaskItem == null) return;
+        
+        try
+        {
+            var allDocs = await DocumentService.SearchDocumentsAsync("", currentUserId);
+            taskDocuments = allDocs.Where(d => d.TaskId == selectedTaskItem.TaskId).ToList();
+        }
+        catch (Exception ex)
+        {
+            taskUploadError = $"Error al cargar documentos: {ex.Message}";
+        }
+    }
+
+    private async Task UploadTaskFile(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null || selectedTaskItem == null) return;
+
+        if (file.Size > 25 * 1024 * 1024)
+        {
+            taskUploadError = "El archivo excede el límite de 25 MB.";
+            taskUploadSuccess = "";
+            return;
+        }
+
+        isTaskUploading = true;
+        taskUploadError = "";
+        taskUploadSuccess = "";
+
+        try
+        {
+            using var memoryStream = new MemoryStream();
+            using (var uploadStream = file.OpenReadStream(26214400))
+            {
+                await uploadStream.CopyToAsync(memoryStream);
+            }
+            memoryStream.Position = 0;
+
+            var title = Path.GetFileNameWithoutExtension(file.Name);
+
+            var success = await DocumentService.UploadDocumentAsync(
+                title,
+                $"Documento adjuntado a la tarea '{selectedTaskItem.Title}'",
+                "Project Documents",
+                file.Name,
+                file.ContentType,
+                memoryStream,
+                currentUserId,
+                selectedTaskItem.ProjectId,
+                "task",
+                selectedTaskItem.TaskId
+            );
+
+            if (success)
+            {
+                taskUploadSuccess = "¡Documento adjuntado con éxito!";
+                await LoadTaskDocuments();
+                taskInputFileKey = Guid.NewGuid();
+            }
+            else
+            {
+                taskUploadError = "Error al subir el documento.";
+            }
+        }
+        catch (Exception ex)
+        {
+            taskUploadError = $"Error de subida: {ex.Message}";
+        }
+        finally
+        {
+            isTaskUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] suffix = { "B", "KB", "MB", "GB" };
+        double dblSized = bytes;
+        int i = 0;
+        while (dblSized >= 1024 && i < suffix.Length - 1)
+        {
+            dblSized /= 1024;
+            i++;
+        }
+        return $"{dblSized:F1} {suffix[i]}";
+    }
+
+    private string GetFileIconClass(string filename)
+    {
+        var ext = Path.GetExtension(filename).ToLower();
+        return ext switch
+        {
+            ".pdf" => "bi-file-pdf text-danger",
+            ".doc" or ".docx" => "bi-file-word text-primary",
+            ".xls" or ".xlsx" => "bi-file-excel text-success",
+            ".ppt" or ".pptx" => "bi-file-slides text-warning",
+            ".jpg" or ".jpeg" or ".png" => "bi-file-image text-info",
+            ".txt" => "bi-file-text text-secondary",
+            _ => "bi-file-earmark text-muted"
+        };
     }
 
     private string GetPriorityColor(TaskPriority priority)

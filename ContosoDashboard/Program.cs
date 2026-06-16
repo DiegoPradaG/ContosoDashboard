@@ -38,11 +38,14 @@ builder.Services.AddAuthorization(options =>
 });
 
 // Register application services
+builder.Services.AddControllers(); // Enable MVC Controllers for API endpoints
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<IFileStorageService, LocalFileStorageService>();
+builder.Services.AddScoped<IDocumentService, DocumentService>();
 
 // Add HttpContextAccessor for accessing user claims
 builder.Services.AddHttpContextAccessor();
@@ -105,6 +108,7 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapControllers(); // Map Web API controller endpoints
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
