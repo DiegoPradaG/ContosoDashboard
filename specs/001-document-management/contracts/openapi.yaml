@@ -1,0 +1,31 @@
+openapi: 3.0.3
+info:
+  title: ContosoDashboard Document Download API
+  description: API segura para la descarga y visualización de archivos protegidos.
+  version: 1.0.0
+paths:
+  /api/documents/download/{id}:
+    get:
+      summary: Descargar un documento por su ID
+      description: Recupera el flujo de bytes de un archivo validando que el usuario autenticado (mediante cookies de sesión) tenga permiso de lectura.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identificador numérico del documento.
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Flujo de bytes del archivo.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Usuario no autenticado.
+        '403':
+          description: Acceso denegado (el usuario no tiene permisos sobre el archivo, protección IDOR).
+        '404':
+          description: Documento no encontrado en la base de datos o archivo físico eliminado en el almacenamiento.
